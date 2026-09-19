@@ -1,1 +1,2 @@
-# klam
+# Klam 
+Klam is a Linux-native input-sharing system designed to connect multiple computers into a single seamless workspace. It uses a central server and directional clients to transparently share keyboard and mouse input, transfer cursor ownership across screen edges, map cursor coordinates between different displays. Klam is built around evdev/uinput for low-level input handling and is designed with a lightweight, low-latency architecture suitable for local networks.
