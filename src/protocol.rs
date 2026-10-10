@@ -1,12 +1,33 @@
 use std::io::{self, Cursor, Error, ErrorKind};
-use anyhow::{
-    Context,
-};
 use clap::ValueEnum;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub const MAX_PACKET_SIZE: usize = 1024 * 1024;
 pub const MAX_INPUT_EVENTS: usize = 4096;
+
+/// Максимальный размер текста буфера обмена (UTF-8 байт).
+pub const MAX_CLIPBOARD_BYTES: usize = MAX_PACKET_SIZE - 64;
+
+/// Коды Linux evdev — это и есть wire-формат ввода. Windows-реализация
+/// транслирует свои события в эти коды и обратно (см. `keymap`).
+pub mod ev {
+    #![allow(dead_code)]
+
+    pub const EV_SYN: u16 = 0x00;
+    pub const EV_KEY: u16 = 0x01;
+    pub const EV_REL: u16 = 0x02;
+
+    pub const REL_X: u16 = 0x00;
+    pub const REL_Y: u16 = 0x01;
+    pub const REL_HWHEEL: u16 = 0x06;
+    pub const REL_WHEEL: u16 = 0x08;
+
+    pub const BTN_LEFT: u16 = 0x110;
+    pub const BTN_RIGHT: u16 = 0x111;
+    pub const BTN_MIDDLE: u16 = 0x112;
+    pub const BTN_SIDE: u16 = 0x113;
+    pub const BTN_EXTRA: u16 = 0x114;
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Direction {
@@ -92,6 +113,20 @@ impl WireEvent {
     }
 }
 
+impl WireEvent {
+    #[inline]
+    pub const fn is_rel_x(self) -> bool {
+        self.event_type == ev::EV_REL
+            && self.code == ev::REL_X
+    }
+
+    #[inline]
+    pub const fn is_rel_y(self) -> bool {
+        self.event_type == ev::EV_REL
+            && self.code == ev::REL_Y
+    }
+}
+
 #[derive(Debug)]
 pub enum Packet {
     Hello,
@@ -118,6 +153,15 @@ pub enum Packet {
     Cursor {
         x: i32,
         y: i32,
+    },
+
+    // Текстовый буфер обмена (UTF-8, переводы строк — `\n`).
+    //
+    // `hash` — хэш текста; получатель использует его, чтобы не отправить
+    // только что полученное значение обратно.
+    Clipboard {
+        hash: u64,
+        text: String,
     },
 }
 
@@ -241,6 +285,29 @@ impl Packet {
                 out.extend_from_slice(
                     &y.to_be_bytes(),
                 );
+            }
+
+            Self::Clipboard { hash, text } => {
+                let bytes = text.as_bytes();
+
+                if bytes.len() > MAX_CLIPBOARD_BYTES {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "clipboard text too large",
+                    ));
+                }
+
+                out.push(8);
+
+                out.extend_from_slice(
+                    &hash.to_be_bytes(),
+                );
+
+                out.extend_from_slice(
+                    &(bytes.len() as u32).to_be_bytes(),
+                );
+
+                out.extend_from_slice(bytes);
             }
         }
 
@@ -385,6 +452,40 @@ impl Packet {
                 Ok(Self::Cursor { x, y })
             }
 
+            8 => {
+                let hash =
+                    read_u64(&mut cursor)?;
+
+                let len =
+                    read_u32(&mut cursor)? as usize;
+
+                if len > MAX_CLIPBOARD_BYTES {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "clipboard text too large",
+                    ));
+                }
+
+                let mut bytes =
+                    vec![0u8; len];
+
+                std::io::Read::read_exact(
+                    &mut cursor,
+                    &mut bytes,
+                )?;
+
+                let text =
+                    String::from_utf8(bytes)
+                        .map_err(|_| {
+                            Error::new(
+                                ErrorKind::InvalidData,
+                                "invalid utf8 clipboard",
+                            )
+                        })?;
+
+                Ok(Self::Clipboard { hash, text })
+            }
+
             _ => Err(Error::new(
                 ErrorKind::InvalidData,
                 "unknown packet tag",
@@ -499,6 +600,34 @@ fn read_i32(
     )?;
 
     Ok(i32::from_be_bytes(buf))
+}
+
+#[inline]
+fn read_u32(
+    cursor: &mut Cursor<&[u8]>,
+) -> io::Result<u32> {
+    let mut buf = [0u8; 4];
+
+    std::io::Read::read_exact(
+        cursor,
+        &mut buf,
+    )?;
+
+    Ok(u32::from_be_bytes(buf))
+}
+
+#[inline]
+fn read_u64(
+    cursor: &mut Cursor<&[u8]>,
+) -> io::Result<u64> {
+    let mut buf = [0u8; 8];
+
+    std::io::Read::read_exact(
+        cursor,
+        &mut buf,
+    )?;
+
+    Ok(u64::from_be_bytes(buf))
 }
 
 #[inline]

@@ -1,13 +1,21 @@
+#[cfg(not(any(target_os = "linux", windows)))]
+compile_error!("klam supports only Linux and Windows");
+
 mod client;
 mod config;
 mod cursor;
 mod input;
+#[cfg(windows)]
+mod keymap;
 mod protocol;
 mod protocols;
 mod server;
 mod wm;
 
-use anyhow::Result;
+use anyhow::{
+    Context,
+    Result,
+};
 use clap::{
     Parser,
     Subcommand,
@@ -38,7 +46,8 @@ When the cursor reaches a configured edge, ownership is transferred
 to the corresponding client. Keyboard input follows the active
 cursor.
 
-The server uses evdev/uinput for input capture and injection.
+Input capture and injection use evdev/uinput on Linux and
+low-level hooks/SendInput on Windows.
 
 Clipboard synchronization is also supported between connected
 machines.
@@ -170,12 +179,15 @@ Width of the server screen in pixels.
 This is the logical width used by the cursor tracker and by coordinate
 mapping during server/client transitions.
 
+Required on Linux. On Windows it is detected automatically when
+omitted (size of the whole virtual desktop).
+
 Example:
 
     --screen-width 2560
 "
         )]
-        screen_width: i32,
+        screen_width: Option<i32>,
 
         #[arg(
             long,
@@ -187,12 +199,15 @@ Height of the server screen in pixels.
 This is the logical height used by the cursor tracker and by
 coordinate mapping during server/client transitions.
 
+Required on Linux. On Windows it is detected automatically when
+omitted (size of the whole virtual desktop).
+
 Example:
 
     --screen-height 1600
 "
         )]
-        screen_height: i32,
+        screen_height: Option<i32>,
 
         #[arg(
             long,
@@ -258,7 +273,8 @@ use:
     --direction left
 
 The client receives keyboard/mouse ownership transitions from the
-server and injects remote input through uinput.
+server and injects remote input (uinput on Linux, SendInput on
+Windows).
 
 Clipboard synchronization is also handled automatically.
 
@@ -375,8 +391,40 @@ Example:
     },
 }
 
+/// Размер экрана сервера: явные аргументы, иначе автоопределение
+/// (только Windows).
+fn resolve_screen_size(
+    width: Option<i32>,
+    height: Option<i32>,
+) -> Result<(i32, i32)> {
+    let detected =
+        wm::detect_screen_size();
+
+    let width =
+        width
+            .or(detected.map(|size| size.0))
+            .context(
+                "--screen-width is required \
+                 (automatic detection is not \
+                 available on this platform)",
+            )?;
+
+    let height =
+        height
+            .or(detected.map(|size| size.1))
+            .context(
+                "--screen-height is required \
+                 (automatic detection is not \
+                 available on this platform)",
+            )?;
+
+    Ok((width, height))
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    wm::init_process();
+
     let cli =
         Cli::parse();
 
@@ -388,6 +436,12 @@ async fn main() -> Result<()> {
             screen_height,
             mouse_sensitivity,
         } => {
+            let (screen_width, screen_height) =
+                resolve_screen_size(
+                    screen_width,
+                    screen_height,
+                )?;
+
             server::run(
                 config::ServerConfig {
                     bind,

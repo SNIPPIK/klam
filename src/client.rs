@@ -1,11 +1,6 @@
-use std::time::Duration;
 use anyhow::{
     Context,
     Result,
-};
-use evdev::{
-    EventType,
-    RelativeAxisCode,
 };
 use tokio::{
     net::TcpStream,
@@ -13,7 +8,10 @@ use tokio::{
 };
 
 use crate::{
-    config::EDGE_TOLERANCE,
+    config::{
+        CLIPBOARD_POLL_INTERVAL,
+        EDGE_TOLERANCE,
+    },
     cursor::CursorTracker,
     input,
     protocol::{
@@ -22,6 +20,7 @@ use crate::{
         Packet,
         Transition,
         WireEvent,
+        MAX_CLIPBOARD_BYTES,
         read_packet,
         write_packet,
     },
@@ -31,6 +30,11 @@ use crate::{
     },
 };
 use crate::protocols::buffer::{HandoffBuffer, DEFAULT_HANDOFF_CAPACITY};
+use crate::protocols::clipboard_sync::{
+    next_clipboard,
+    ClipboardSync,
+    ClipboardUpdate,
+};
 
 pub async fn run(
     connect: String,
@@ -38,11 +42,22 @@ pub async fn run(
     screen_width: Option<i32>,
     screen_height: Option<i32>,
 ) -> Result<()> {
+    /*
+     * Явно заданный размер имеет приоритет.
+     * Иначе — автоопределение (Windows), иначе 1920x1080.
+     */
+    let detected =
+        wm::detect_screen_size();
+
     let width =
-        screen_width.unwrap_or(1920);
+        screen_width
+            .or(detected.map(|size| size.0))
+            .unwrap_or(1920);
 
     let height =
-        screen_height.unwrap_or(1080);
+        screen_height
+            .or(detected.map(|size| size.1))
+            .unwrap_or(1080);
 
     let stream =
         TcpStream::connect(&connect)
@@ -186,14 +201,17 @@ pub async fn run(
     input::spawn_readers(
         Vec::new(),
         input_tx,
-    );
+    )?;
 
     let mut backend =
         wm::create("Klam Client")?;
 
-    let mut clipboard_tick =
-        tokio::time::interval(
-            Duration::from_millis(100),
+    /*
+     * None = буфер обмена недоступен.
+     */
+    let mut clipboard =
+        ClipboardSync::spawn(
+            CLIPBOARD_POLL_INTERVAL,
         );
 
     let mut cursor =
@@ -261,9 +279,37 @@ pub async fn run(
                     &mut remote,
                     direction,
                     &mut return_pending,
+                    &clipboard,
                     packet,
                 )
                 .await?;
+            }
+
+            /*
+             * Локальный буфер обмена клиента изменился -> серверу.
+             */
+            Some(update) =
+                next_clipboard(&mut clipboard) => {
+                if update.text.len()
+                    > MAX_CLIPBOARD_BYTES
+                {
+                    eprintln!(
+                        "[CLIENT CLIPBOARD] \
+                         local clipboard too large \
+                         ({} bytes), not synced",
+                        update.text.len()
+                    );
+                } else {
+                    control_tx
+                        .send(
+                            Packet::Clipboard {
+                                hash: update.hash,
+                                text: update.text,
+                            },
+                        )
+                        .await
+                        .ok();
+                }
             }
 
             else => {
@@ -604,6 +650,7 @@ async fn process_network_packet(
     remote: &mut bool,
     direction: Direction,
     return_pending: &mut bool,
+    clipboard: &Option<ClipboardSync>,
     packet: Packet,
 ) -> Result<()> {
     match packet {
@@ -799,6 +846,30 @@ async fn process_network_packet(
             );
         }
 
+        /*
+         * SERVER -> CLIENT: новый буфер обмена.
+         */
+        Packet::Clipboard { hash, text } => {
+            if text.len() <= MAX_CLIPBOARD_BYTES {
+                eprintln!(
+                    "[CLIENT CLIPBOARD] \
+                     received {} bytes",
+                    text.len()
+                );
+
+                if let Some(sync) =
+                    clipboard.as_ref()
+                {
+                    sync.push_remote(
+                        ClipboardUpdate {
+                            hash,
+                            text,
+                        },
+                    );
+                }
+            }
+        }
+
         Packet::Register { .. }
         | Packet::Cursor { .. } => {}
     }
@@ -924,18 +995,12 @@ fn apply_return_transition(
 fn is_rel_x(
     event: WireEvent,
 ) -> bool {
-    event.event_type
-        == EventType::RELATIVE.0
-        && event.code
-        == RelativeAxisCode::REL_X.0
+    event.is_rel_x()
 }
 
 #[inline]
 fn is_rel_y(
     event: WireEvent,
 ) -> bool {
-    event.event_type
-        == EventType::RELATIVE.0
-        && event.code
-        == RelativeAxisCode::REL_Y.0
+    event.is_rel_y()
 }

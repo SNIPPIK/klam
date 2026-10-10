@@ -178,6 +178,7 @@ dependencies = [
  "clap",
  "evdev",
  "tokio",
+ "windows-sys",
 ]
 
 [[package]]

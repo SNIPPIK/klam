@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    time::Duration,
+};
 
 /// Максимальное отклонение курсора от края,
 /// при котором разрешён переход на соседний стол.
@@ -17,3 +20,6 @@ pub struct ServerConfig {
     pub screen_height: i32,
     pub mouse_sensitivity: f32,
 }
+/// Как часто опрашивается локальный буфер обмена.
+pub const CLIPBOARD_POLL_INTERVAL: Duration =
+    Duration::from_millis(100);

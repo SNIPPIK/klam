@@ -7,10 +7,6 @@ use anyhow::{
     Context,
     Result,
 };
-use evdev::{
-    EventType,
-    RelativeAxisCode,
-};
 use tokio::{
     net::{
         TcpListener,
@@ -20,7 +16,10 @@ use tokio::{
 };
 
 use crate::{
-    config::ServerConfig,
+    config::{
+        ServerConfig,
+        CLIPBOARD_POLL_INTERVAL,
+    },
     cursor::CursorTracker,
     input,
     protocol::{
@@ -32,6 +31,7 @@ use crate::{
         Packet,
         Transition,
         WireEvent,
+        MAX_CLIPBOARD_BYTES,
     },
     wm::{
         self,
@@ -39,6 +39,11 @@ use crate::{
     },
 };
 use crate::protocols::buffer::{HandoffBuffer, DEFAULT_HANDOFF_CAPACITY};
+use crate::protocols::clipboard_sync::{
+    next_clipboard,
+    ClipboardSync,
+    ClipboardUpdate,
+};
 
 const EDGE_TOLERANCE: i32 =
     crate::config::EDGE_TOLERANCE;
@@ -128,7 +133,18 @@ pub async fn run(
     input::spawn_readers(
         Vec::new(),
         input_tx,
-    );
+    )?;
+
+    /*
+     * Синхронизация буфера обмена.
+     *
+     * None = буфер обмена недоступен (клавиатура/мышь
+     * продолжают работать).
+     */
+    let mut clipboard =
+        ClipboardSync::spawn(
+            CLIPBOARD_POLL_INTERVAL,
+        );
 
     let (
         client_event_tx,
@@ -204,9 +220,35 @@ pub async fn run(
                     &mut clients,
                     &mut active_client,
                     &config,
+                    &clipboard,
                     event,
                 )
                 .await?;
+            }
+
+            /*
+             * Локальный буфер обмена сервера изменился ->
+             * рассылаем всем клиентам.
+             */
+            Some(update) =
+                next_clipboard(&mut clipboard) => {
+                if update.text.len()
+                    > MAX_CLIPBOARD_BYTES
+                {
+                    eprintln!(
+                        "[SERVER CLIPBOARD] \
+                         local clipboard too large \
+                         ({} bytes), not synced",
+                        update.text.len()
+                    );
+                } else {
+                    broadcast_clipboard(
+                        &clients,
+                        None,
+                        update.hash,
+                        &update.text,
+                    );
+                }
             }
 
             else => {
@@ -409,6 +451,7 @@ async fn process_client_event(
     clients: &mut HashMap<u64, ConnectedClient>,
     active_client: &mut Option<u64>,
     config: &ServerConfig,
+    clipboard: &Option<ClipboardSync>,
     event: ClientEvent,
 ) -> Result<()> {
     match event {
@@ -453,6 +496,7 @@ async fn process_client_event(
                 clients,
                 active_client,
                 config,
+                clipboard,
                 id,
                 packet,
             )
@@ -494,6 +538,7 @@ async fn handle_client_packet(
     clients: &mut HashMap<u64, ConnectedClient>,
     active_client: &mut Option<u64>,
     config: &ServerConfig,
+    clipboard: &Option<ClipboardSync>,
     id: u64,
     packet: Packet,
 ) -> Result<()> {
@@ -776,6 +821,44 @@ async fn handle_client_packet(
                     .await
                     .ok();
             }
+        }
+
+        /*
+         * ============================================================
+         * CLIPBOARD
+         * ============================================================
+         *
+         * CLIENT -> SERVER -> (локальный буфер + остальные клиенты)
+         */
+        Packet::Clipboard { hash, text } => {
+            if text.len() > MAX_CLIPBOARD_BYTES {
+                return Ok(());
+            }
+
+            eprintln!(
+                "[SERVER CLIPBOARD] \
+                 client#{} sent {} bytes",
+                id,
+                text.len()
+            );
+
+            if let Some(sync) =
+                clipboard.as_ref()
+            {
+                sync.push_remote(
+                    ClipboardUpdate {
+                        hash,
+                        text: text.clone(),
+                    },
+                );
+            }
+
+            broadcast_clipboard(
+                clients,
+                Some(id),
+                hash,
+                &text,
+            );
         }
 
         Packet::Pong
@@ -1423,20 +1506,14 @@ fn at_remote_return_edge(
 fn is_rel_x(
     event: WireEvent,
 ) -> bool {
-    event.event_type
-        == EventType::RELATIVE.0
-        && event.code
-        == RelativeAxisCode::REL_X.0
+    event.is_rel_x()
 }
 
 #[inline]
 fn is_rel_y(
     event: WireEvent,
 ) -> bool {
-    event.event_type
-        == EventType::RELATIVE.0
-        && event.code
-        == RelativeAxisCode::REL_Y.0
+    event.is_rel_y()
 }
 
 #[allow(dead_code)]
@@ -1446,4 +1523,34 @@ fn is_mouse_axis(
 ) -> bool {
     is_rel_x(event)
         || is_rel_y(event)
+}
+
+/// Рассылает буфер обмена клиентам (кроме `except`).
+///
+/// `try_send`: медленный клиент не должен блокировать сервер.
+fn broadcast_clipboard(
+    clients: &HashMap<u64, ConnectedClient>,
+    except: Option<u64>,
+    hash: u64,
+    text: &str,
+) {
+    for (id, client) in clients {
+        if Some(*id) == except {
+            continue;
+        }
+
+        if client.direction.is_none() {
+            continue;
+        }
+
+        let _ =
+            client
+                .control_tx
+                .try_send(
+                    Packet::Clipboard {
+                        hash,
+                        text: text.to_owned(),
+                    },
+                );
+    }
 }
