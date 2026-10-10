@@ -84,6 +84,13 @@ impl CursorTracker {
         (applied, remainder)
     }
 
+    /// Привести логическую позицию к реальной (если ОС её сообщает).
+    #[inline]
+    pub fn set_position(&mut self, x: i32, y: i32) {
+        self.position.x = x.clamp(0, self.width - 1);
+        self.position.y = y.clamp(0, self.height - 1);
+    }
+
     #[inline]
     pub fn set_horizontal_edge(
         &mut self,

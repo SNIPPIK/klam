@@ -10,6 +10,7 @@ use evdev::{
 use std::{
     fs,
     path::{Path, PathBuf},
+    process::Command,
 };
 use tokio::sync::mpsc;
 
@@ -314,6 +315,29 @@ fn read_device(
         name
     );
 
+    /*
+     * Нормализация под DPI мыши.
+     *
+     * Родной libinput масштабирует движение по MOUSE_DPI из udev/hwdb.
+     * У виртуального uinput-устройства такой записи нет, поэтому без
+     * этого скорость отличалась бы от родной.
+     */
+    let is_mouse =
+        device
+            .supported_relative_axes()
+            .map_or(false, |axes| {
+                axes.contains(
+                    RelativeAxisCode::REL_X
+                )
+            });
+
+    let mut scaler =
+        if is_mouse {
+            DpiScaler::detect(&path, &name)
+        } else {
+            None
+        };
+
     loop {
         let events =
             device
@@ -331,8 +355,15 @@ fn read_device(
             );
 
         for event in events {
-            let event =
+            let mut event =
                 convert_event(event);
+
+            if let Some(scaler) =
+                scaler.as_mut()
+            {
+                event =
+                    scaler.apply(event);
+            }
 
             if batch.len()
                 >= MAX_INPUT_EVENTS
@@ -392,4 +423,145 @@ fn flush_batch(
                 "input receiver dropped"
             )
         })
+}
+/// Приводит REL_X/REL_Y к 1000 DPI, как это делает libinput.
+struct DpiScaler {
+    scale: f64,
+    remainder_x: f64,
+    remainder_y: f64,
+}
+
+impl DpiScaler {
+    fn detect(
+        path: &Path,
+        name: &str,
+    ) -> Option<Self> {
+        let output =
+            Command::new("udevadm")
+                .args([
+                    "info",
+                    "--query=property",
+                    "--name",
+                ])
+                .arg(path)
+                .output()
+                .ok()?;
+
+        let text =
+            String::from_utf8_lossy(
+                &output.stdout,
+            );
+
+        let value =
+            text.lines()
+                .find_map(|line| {
+                    line.strip_prefix(
+                        "MOUSE_DPI="
+                    )
+                })?;
+
+        let dpi =
+            parse_default_dpi(value)?;
+
+        let scale =
+            1000.0 / dpi;
+
+        eprintln!(
+            "[INPUT] {} | MOUSE_DPI={} -> default {} dpi, scale {:.3}",
+            name,
+            value,
+            dpi,
+            scale
+        );
+
+        if (scale - 1.0).abs() < 0.01 {
+            return None;
+        }
+
+        Some(Self {
+            scale,
+            remainder_x: 0.0,
+            remainder_y: 0.0,
+        })
+    }
+
+    fn apply(
+        &mut self,
+        mut event: WireEvent,
+    ) -> WireEvent {
+        if event.event_type == EV_REL {
+            match event.code {
+                0 => {
+                    event.value =
+                        Self::step(
+                            &mut self.remainder_x,
+                            event.value,
+                            self.scale,
+                        );
+                }
+
+                1 => {
+                    event.value =
+                        Self::step(
+                            &mut self.remainder_y,
+                            event.value,
+                            self.scale,
+                        );
+                }
+
+                _ => {}
+            }
+        }
+
+        event
+    }
+
+    /// Дробный остаток переносится на следующее событие,
+    /// чтобы медленное движение не терялось.
+    fn step(
+        remainder: &mut f64,
+        value: i32,
+        scale: f64,
+    ) -> i32 {
+        let total =
+            *remainder
+                + value as f64 * scale;
+
+        let whole =
+            total.trunc();
+
+        *remainder =
+            total - whole;
+
+        whole as i32
+    }
+}
+
+/// `MOUSE_DPI`: список вида `400 800 *1600@1000`, значение по умолчанию
+/// помечено `*`; если пометки нет — берётся первое.
+fn parse_default_dpi(value: &str) -> Option<f64> {
+    let entries: Vec<&str> =
+        value.split_whitespace().collect();
+
+    let chosen =
+        entries
+            .iter()
+            .find(|entry| {
+                entry.starts_with('*')
+            })
+            .or(entries.first())?;
+
+    let dpi: f64 =
+        chosen
+            .trim_start_matches('*')
+            .split('@')
+            .next()?
+            .parse()
+            .ok()?;
+
+    if dpi > 0.0 {
+        Some(dpi)
+    } else {
+        None
+    }
 }

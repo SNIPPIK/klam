@@ -4,6 +4,8 @@ compile_error!("klam supports only Linux and Windows");
 mod client;
 mod config;
 mod cursor;
+mod discovery;
+mod gui;
 mod input;
 #[cfg(windows)]
 mod keymap;
@@ -52,6 +54,8 @@ low-level hooks/SendInput on Windows.
 Clipboard synchronization is also supported between connected
 machines.
 
+Run without a command to open the graphical interface.
+
 COMMANDS:
 
     server    Start the central Klam server
@@ -63,13 +67,15 @@ Use:
     klam client --help
 
 for detailed command-specific help.
-",
-    subcommand_required = true,
-    arg_required_else_help = true
+"
 )]
 struct Cli {
+    /// Внутренний флаг: завершиться, когда закроется stdin (его ставит GUI).
+    #[arg(long, hide = true, global = true)]
+    exit_on_stdin_eof: bool,
+
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -428,7 +434,28 @@ async fn main() -> Result<()> {
     let cli =
         Cli::parse();
 
-    match cli.command {
+    if cli.exit_on_stdin_eof {
+        std::thread::spawn(|| {
+            use std::io::Read;
+
+            let mut buffer = [0u8; 64];
+            let mut stdin = std::io::stdin();
+
+            while let Ok(read) = stdin.read(&mut buffer) {
+                if read == 0 {
+                    break;
+                }
+            }
+
+            std::process::exit(0);
+        });
+    }
+
+    let Some(command) = cli.command else {
+        return gui::run();
+    };
+
+    match command {
         Command::Server {
             bind,
             device,

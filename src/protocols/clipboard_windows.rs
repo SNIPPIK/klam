@@ -15,12 +15,12 @@ use anyhow::{Result, bail};
 use windows_sys::Win32::{
     Foundation::GlobalFree,
     System::{
-        DataExchange::{
-            CloseClipboard, EmptyClipboard, GetClipboardData, GetClipboardSequenceNumber,
-            IsClipboardFormatAvailable, OpenClipboard, SetClipboardData,
-        },
-        Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock},
+    DataExchange::{
+        CloseClipboard, EmptyClipboard, GetClipboardData, GetClipboardSequenceNumber,
+        IsClipboardFormatAvailable, OpenClipboard, SetClipboardData,
     },
+    Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock},
+    }
 };
 
 use super::buffer::hash_text;

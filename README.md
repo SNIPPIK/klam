@@ -1,2 +1,11 @@
-# Klam 
-Klam is a Linux-native input-sharing system designed to connect multiple computers into a single seamless workspace. It uses a central server and directional clients to transparently share keyboard and mouse input, transfer cursor ownership across screen edges, map cursor coordinates between different displays. Klam is built around evdev/uinput for low-level input handling and is designed with a lightweight, low-latency architecture suitable for local networks.
+<div align="center">
+<h1>Klam — Ultra-low latency, cross-platform KVM sharing engine</h1>
+</div>
+Klam — это легковесный, высокопроизводительный KVM-композитор с открытым исходным кодом, написанный на чистом Rust. 
+Проект позволяет бесшовно использовать один комплект клавиатуры, мыши и буфера обмена для управления несколькими физическими компьютерами (Linux и Windows) по локальной сети, избавляя от необходимости использовать аппаратные переключатели.
+
+> [!WARNING]
+> Используйте только в проверенных сетях! Никакой криптографической защиты нет!!!
+
+[<img align="left" alt="Client" width="400px" src=".github/images/client.jpg" />]()
+[<img align="right" alt="Server" width="400px" src=".github/images/server.jpg" />]()

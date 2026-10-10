@@ -26,6 +26,15 @@ pub trait InputBackend: Send {
         coordinate: i32,
         current: CursorPosition,
     ) -> Result<()>;
+
+    /// Реальная позиция курсора, если ОС её сообщает (Windows).
+    ///
+    /// Нужна, потому что движение воспроизводится с родной скоростью и
+    /// акселерацией системы, и логический `CursorTracker` иначе
+    /// расходился бы с настоящим курсором. На Linux не используется.
+    fn cursor_position(&mut self) -> Option<CursorPosition> {
+        None
+    }
 }
 
 #[cfg(target_os = "linux")]

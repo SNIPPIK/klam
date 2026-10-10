@@ -2,10 +2,11 @@
 //!
 //! * Клавиши — `SendInput` со scan code (физические клавиши, как на Linux).
 //! * Кнопки мыши и колесо — `SendInput`.
-//! * Движение — **точное**: `GetCursorPos` + дельта + `SetCursorPos`.
-//!   Это сознательно без Windows-акселерации: логический `CursorTracker`
-//!   считает 1 единицу REL = 1 пиксель, и курсор должен ему соответствовать,
-//!   иначе границы экрана «уезжают» и переходы срабатывают не там.
+//! * Движение — `SendInput(MOUSEEVENTF_MOVE)`, как от физической мыши:
+//!   действуют родная скорость указателя и акселерация Windows.
+//!   Чтобы логический `CursorTracker` не расходился с настоящим курсором,
+//!   `cursor_position()` отдаёт реальную позицию, и вызывающий код
+//!   периодически к ней подтягивается.
 //! * `sync_to_edge` — прямой `SetCursorPos` на нужный край.
 
 use std::{
@@ -36,6 +37,7 @@ const KEYEVENTF_EXTENDEDKEY: u32 = 0x0001;
 const KEYEVENTF_KEYUP: u32 = 0x0002;
 const KEYEVENTF_SCANCODE: u32 = 0x0008;
 
+const MOUSEEVENTF_MOVE: u32 = 0x0001;
 const MOUSEEVENTF_LEFTDOWN: u32 = 0x0002;
 const MOUSEEVENTF_LEFTUP: u32 = 0x0004;
 const MOUSEEVENTF_RIGHTDOWN: u32 = 0x0008;
@@ -147,9 +149,7 @@ impl super::InputBackend for WindowsBackend {
             }
 
             if let Some(input) = translate(event) {
-                // Клик должен произойти уже на новой позиции, а предыдущие
-                // нажатия — до движения. Поэтому перед каждым не-движением
-                // применяем накопленное движение.
+                // Сохраняем порядок: накопленное движение — до этого события.
                 apply_motion(&mut inputs, &mut dx, &mut dy);
                 inputs.push(input);
             }
@@ -159,6 +159,21 @@ impl super::InputBackend for WindowsBackend {
         send(&inputs);
 
         Ok(())
+    }
+
+    fn cursor_position(&mut self) -> Option<CursorPosition> {
+        let (left, top, width, height) = virtual_screen();
+
+        let mut point = POINT { x: 0, y: 0 };
+
+        if unsafe { GetCursorPos(&mut point) } == 0 {
+            return None;
+        }
+
+        Some(CursorPosition {
+            x: (point.x - left).clamp(0, width - 1),
+            y: (point.y - top).clamp(0, height - 1),
+        })
     }
 
     fn sync_to_edge(
@@ -194,32 +209,10 @@ fn apply_motion(inputs: &mut Vec<INPUT>, dx: &mut i32, dy: &mut i32) {
         return;
     }
 
-    send(inputs);
-    inputs.clear();
-
-    move_cursor_by(*dx, *dy);
+    inputs.push(mouse_move_input(*dx, *dy));
 
     *dx = 0;
     *dy = 0;
-}
-
-fn move_cursor_by(dx: i32, dy: i32) {
-    let (left, top, width, height) = virtual_screen();
-
-    let _guard = InjectGuard::new();
-
-    unsafe {
-        let mut point = POINT { x: 0, y: 0 };
-
-        if GetCursorPos(&mut point) == 0 {
-            return;
-        }
-
-        let x = point.x.saturating_add(dx).clamp(left, left + width - 1);
-        let y = point.y.saturating_add(dy).clamp(top, top + height - 1);
-
-        SetCursorPos(x, y);
-    }
 }
 
 fn send(inputs: &[INPUT]) {
@@ -323,6 +316,22 @@ fn key_input(vk: u16, scan: u16, flags: u32) -> INPUT {
                 wVk: vk,
                 wScan: scan,
                 dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    }
+}
+
+fn mouse_move_input(dx: i32, dy: i32) -> INPUT {
+    INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx,
+                dy,
+                mouseData: 0,
+                dwFlags: MOUSEEVENTF_MOVE,
                 time: 0,
                 dwExtraInfo: 0,
             },

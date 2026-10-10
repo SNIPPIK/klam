@@ -118,6 +118,19 @@ pub async fn run(
         config.bind
     );
 
+    /*
+     * Beacon для автоматического поиска сервера в GUI клиентов.
+     */
+    if let Some(port) =
+        config
+            .bind
+            .rsplit(':')
+            .next()
+            .and_then(|port| port.parse::<u16>().ok())
+    {
+        crate::discovery::spawn_beacon(port);
+    }
+
     let mut backend =
         wm::create("Klam Server")?;
 
@@ -1237,6 +1250,19 @@ async fn process_local_input(
         backend,
         &local,
     )?;
+
+    /*
+     * Подтягиваем логический курсор к реальному
+     * (Windows: родная скорость и акселерация).
+     */
+    if let Some(real) =
+        backend.cursor_position()
+    {
+        cursor.set_position(
+            real.x,
+            real.y,
+        );
+    }
 
     Ok(())
 }

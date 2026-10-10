@@ -381,6 +381,15 @@ async fn process_input(
                 "failed to replay local client input",
             )?;
 
+        if let Some(real) =
+            backend.cursor_position()
+        {
+            cursor.set_position(
+                real.x,
+                real.y,
+            );
+        }
+
         return Ok(());
     }
 
@@ -532,6 +541,21 @@ async fn process_input(
         .context(
             "failed to replay client input",
         )?;
+
+    /*
+     * Если возврат запрошен, логическую позицию не трогаем:
+     * сервер проверяет по ней, что курсор у края.
+     */
+    if return_index.is_none() {
+        if let Some(real) =
+            backend.cursor_position()
+        {
+            cursor.set_position(
+                real.x,
+                real.y,
+            );
+        }
+    }
 
     /*
      * Возврата нет.
@@ -746,6 +770,17 @@ async fn process_network_packet(
                 .context(
                     "failed to inject server input",
                 )?;
+
+            if !return_requested {
+                if let Some(real) =
+                    backend.cursor_position()
+                {
+                    cursor.set_position(
+                        real.x,
+                        real.y,
+                    );
+                }
+            }
 
             if return_requested {
                 send_return_cursor(

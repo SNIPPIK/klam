@@ -1,0 +1,93 @@
+name: Build Rust Modules
+on:
+  push:
+    branches: [ "main" ]
+    tags-ignore:
+      - '**'
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          # Windows
+          - host: windows-latest
+            target: x86_64-pc-windows-msvc
+
+          # Linux (glibc)
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+
+          # Linux (musl)
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            cross: true
+
+    name: build-${{ matrix.settings.target }}
+    runs-on: ${{ matrix.settings.host }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.settings.target }}
+
+      - name: Install Zig
+        if: ${{ matrix.settings.cross }}
+        uses: goto-bus-stop/setup-zig@v2
+
+      - name: Install cargo-zigbuild
+        if: ${{ matrix.settings.cross }}
+        run: cargo install cargo-zigbuild --locked
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TARGET="${{ matrix.settings.target }}"
+
+          # macOS: разрешаем неразрешённые символы при линковке
+          if [[ "$TARGET" == *"-apple-darwin"* ]]; then
+            export RUSTFLAGS="-C link-args=-Wl,-undefined,dynamic_lookup"
+          fi
+
+          if [ "${{ matrix.settings.cross }}" == "true" ]; then
+            # zigbuild сам подхватывает Zig как линкер и умеет --platform для musl
+            cargo zigbuild --release --target "$TARGET"
+          else
+            cargo build --release --target "$TARGET"
+          fi
+
+      - name: Prepare artifact folder
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TARGET="${{ matrix.settings.target }}"
+          OUT_DIR="target/${TARGET}/release"
+
+          echo "Looking for artifacts in: $OUT_DIR"
+          ls -la "$OUT_DIR" || true
+
+          mkdir -p build
+
+          # Копируем всё, что нужно отдать наружу
+          cp -v "$OUT_DIR"/*.exe build/ 2>/dev/null || true
+          cp -v "$OUT_DIR"/sthp     build/ 2>/dev/null || true
+          cp -v "$OUT_DIR"/sthp.exe build/ 2>/dev/null || true
+
+          echo "----- build/ contents -----"
+          ls -la build
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: bindings-${{ matrix.settings.target }}
+          path: build/
+          if-no-files-found: error
+          retention-days: 14
