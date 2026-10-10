@@ -78,8 +78,8 @@ jobs:
 
           # Копируем всё, что нужно отдать наружу
           cp -v "$OUT_DIR"/*.exe build/ 2>/dev/null || true
-          cp -v "$OUT_DIR"/sthp     build/ 2>/dev/null || true
-          cp -v "$OUT_DIR"/sthp.exe build/ 2>/dev/null || true
+          cp -v "$OUT_DIR"/klam     build/ 2>/dev/null || true
+          cp -v "$OUT_DIR"/klam.exe build/ 2>/dev/null || true
 
           echo "----- build/ contents -----"
           ls -la build

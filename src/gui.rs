@@ -20,8 +20,8 @@ use std::{
 
 use anyhow::{Context, Result};
 use eframe::egui::{
-    self, Align, Align2, Button, Color32, CornerRadius, FontId, Layout, Rect, RichText, Sense,
-    Stroke, StrokeKind, TextEdit, vec2,
+    self, Align, Align2, Button, Color32, FontId, Layout, Rect, RichText, Rounding, Sense, Stroke,
+    TextEdit, vec2,
 };
 
 use crate::{
@@ -80,14 +80,13 @@ fn setup_style(ctx: &egui::Context) {
     visuals.selection.bg_fill = ACCENT;
     visuals.selection.stroke = Stroke::new(1.0, Color32::WHITE);
 
-    // ! 0.36.2: Rounding -> CornerRadius (u8 вместо f32).
-    let corner_radius = CornerRadius::same(8);
+    let rounding = Rounding::same(8.0);
 
-    visuals.widgets.noninteractive.corner_radius = corner_radius;
-    visuals.widgets.inactive.corner_radius = corner_radius;
-    visuals.widgets.hovered.corner_radius = corner_radius;
-    visuals.widgets.active.corner_radius = corner_radius;
-    visuals.widgets.open.corner_radius = corner_radius;
+    visuals.widgets.noninteractive.rounding = rounding;
+    visuals.widgets.inactive.rounding = rounding;
+    visuals.widgets.hovered.rounding = rounding;
+    visuals.widgets.active.rounding = rounding;
+    visuals.widgets.open.rounding = rounding;
 
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, BORDER);
     visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, BORDER);
@@ -99,8 +98,7 @@ fn setup_style(ctx: &egui::Context) {
 
     ctx.set_visuals(visuals);
 
-    // ! 0.36.2: Context::style_mut удалён, используем all_styles_mut.
-    ctx.all_styles_mut(|style| {
+    ctx.style_mut(|style| {
         style.spacing.item_spacing = vec2(10.0, 10.0);
         style.spacing.button_padding = vec2(14.0, 8.0);
         style.spacing.interact_size.y = 32.0;
@@ -287,14 +285,7 @@ impl App {
         ui.horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::hover());
 
-            // ! 0.36.2: Painter::rect теперь требует StrokeKind.
-            ui.painter().rect(
-                rect,
-                CornerRadius::same(12),
-                ACCENT,
-                Stroke::NONE,
-                StrokeKind::Inside,
-            );
+            ui.painter().rect(rect, 12.0, ACCENT, Stroke::NONE);
             ui.painter().text(
                 rect.center(),
                 Align2::CENTER_CENTER,
@@ -306,11 +297,7 @@ impl App {
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 ui.label(RichText::new("Klam").size(22.0).strong());
-                ui.label(
-                    RichText::new("Одна мышь и клавиатура на всех")
-                        .size(12.5)
-                        .color(MUTED),
-                );
+                ui.label(RichText::new("Одна мышь и клавиатура на всех").size(12.5).color(MUTED));
             });
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -324,14 +311,13 @@ impl App {
             for (mode, label) in [(Mode::Client, "Клиент"), (Mode::Server, "Сервер")] {
                 let selected = self.mode == mode;
 
-                // ! 0.36.2: Button::rounding -> Button::corner_radius.
                 let button = Button::new(
                     RichText::new(label)
                         .size(15.0)
                         .color(if selected { Color32::WHITE } else { MUTED }),
                 )
                     .fill(if selected { ACCENT } else { ROW })
-                    .corner_radius(CornerRadius::same(8))
+                    .rounding(8.0)
                     .min_size(vec2(110.0, 34.0));
 
                 if ui.add_enabled(!running, button).clicked() {
@@ -351,7 +337,10 @@ impl App {
                 if servers.is_empty() {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label(RichText::new("Ищу серверы в сети...").color(MUTED));
+                        ui.label(
+                            RichText::new("Ищу серверы в сети...")
+                                .color(MUTED),
+                        );
                     });
                 }
 
@@ -393,7 +382,8 @@ impl App {
             card(ui, |ui| {
                 caption(ui, "ЭТОТ КОМПЬЮТЕР — СЕРВЕР");
                 ui.label(
-                    RichText::new("Клиенты найдут его автоматически (UDP 24802).").color(MUTED),
+                    RichText::new("Клиенты найдут его автоматически (UDP 24802).")
+                        .color(MUTED),
                 );
             });
 
@@ -446,10 +436,9 @@ impl App {
         egui::CollapsingHeader::new(RichText::new("Журнал").color(MUTED))
             .default_open(false)
             .show(ui, |ui| {
-                // ! 0.36.2: Frame::none -> Frame::NONE, rounding -> corner_radius.
-                egui::Frame::NONE
+                egui::Frame::none()
                     .fill(LOG_BG)
-                    .corner_radius(CornerRadius::same(8))
+                    .rounding(8.0)
                     .inner_margin(8.0)
                     .show(ui, |ui| {
                         egui::ScrollArea::vertical()
@@ -475,31 +464,31 @@ impl App {
 }
 
 impl eframe::App for App {
-    // ! 0.36.2: трейт App требует `ui`, а не `update`.
-    // `ui` получает уже готовый корневой Ui, CentralPanel больше не нужен.
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_runner();
 
-        egui::Frame::NONE.fill(BG).inner_margin(18.0).show(ui, |ui| {
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    let running = self.runner.is_some();
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(BG).inner_margin(18.0))
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        let running = self.runner.is_some();
 
-                    self.header(ui);
-                    ui.add_space(4.0);
-                    self.mode_tabs(ui, running);
+                        self.header(ui);
+                        ui.add_space(4.0);
+                        self.mode_tabs(ui, running);
 
-                    match self.mode {
-                        Mode::Client => self.client_ui(ui, running),
-                        Mode::Server => self.server_ui(ui, running),
-                    }
+                        match self.mode {
+                            Mode::Client => self.client_ui(ui, running),
+                            Mode::Server => self.server_ui(ui, running),
+                        }
 
-                    self.log_ui(ui);
-                });
-        });
+                        self.log_ui(ui);
+                    });
+            });
 
-        ui.ctx().request_repaint_after(Duration::from_millis(300));
+        ctx.request_repaint_after(Duration::from_millis(300));
     }
 }
 
@@ -508,10 +497,9 @@ impl eframe::App for App {
 // ---------------------------------------------------------------------------
 
 fn card(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
-    // ! 0.36.2: Frame::none -> Frame::NONE, rounding -> corner_radius.
-    egui::Frame::NONE
+    egui::Frame::none()
         .fill(CARD)
-        .corner_radius(CornerRadius::same(12))
+        .rounding(12.0)
         .stroke(Stroke::new(1.0, BORDER))
         .inner_margin(14.0)
         .show(ui, |ui| {
@@ -525,11 +513,10 @@ fn caption(ui: &mut egui::Ui, text: &str) {
 }
 
 fn big_button(ui: &mut egui::Ui, text: &str, fill: Color32) -> bool {
-    // ! 0.36.2: Button::rounding -> Button::corner_radius.
     ui.add(
         Button::new(RichText::new(text).size(16.0).strong().color(Color32::WHITE))
             .fill(fill)
-            .corner_radius(CornerRadius::same(10))
+            .rounding(10.0)
             .min_size(vec2(ui.available_width(), 44.0)),
     )
         .clicked()
@@ -570,8 +557,7 @@ fn server_row(ui: &mut egui::Ui, name: &str, address: &str, selected: bool, enab
 
     let painter = ui.painter();
 
-    // ! 0.36.2: Painter::rect теперь принимает StrokeKind.
-    painter.rect(rect, CornerRadius::same(10), fill, stroke, StrokeKind::Inside);
+    painter.rect(rect, 10.0, fill, stroke);
     painter.circle_filled(rect.left_center() + vec2(18.0, 0.0), 5.0, GREEN);
     painter.text(
         rect.left_top() + vec2(36.0, 8.0),
@@ -599,13 +585,11 @@ fn side_picker(ui: &mut egui::Ui, side: &mut Direction, enabled: bool) {
 
     let server = Rect::from_center_size(center, vec2(110.0, 56.0));
 
-    // ! 0.36.2: Painter::rect теперь принимает StrokeKind.
     painter.rect(
         server,
-        CornerRadius::same(10),
+        10.0,
         ROW,
         Stroke::new(1.5, MUTED),
-        StrokeKind::Inside,
     );
     painter.text(
         server.center(),
@@ -656,8 +640,7 @@ fn side_picker(ui: &mut egui::Ui, side: &mut Direction, enabled: bool) {
             Stroke::new(1.0, BORDER)
         };
 
-        // ! 0.36.2: Painter::rect теперь принимает StrokeKind.
-        painter.rect(rect, CornerRadius::same(10), fill, stroke, StrokeKind::Inside);
+        painter.rect(rect, 10.0, fill, stroke);
 
         painter.text(
             rect.center(),
