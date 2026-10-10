@@ -7,5 +7,6 @@ Klam — это легковесный, высокопроизводительн
 > [!WARNING]
 > Используйте только в проверенных сетях! Никакой криптографической защиты нет!!!
 
-[<img align="left" alt="Client" width="400px" src=".github/images/client.jpg" />]()
-[<img align="right" alt="Server" width="400px" src=".github/images/server.jpg" />]()
+| Client | Server |
+|:------:|:------:|
+| [<img alt="Client" width="400px" src=".github/images/client.jpg" />]() | [<img alt="Server" width="400px" src=".github/images/server.jpg" />]() |
